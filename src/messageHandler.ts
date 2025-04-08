@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { WebSocketClient, SignalingMessage, MessageType, LoginPayload, RegisterPushPayload } from './types';
 import { saveOrUpdatePushToken, getPushToken } from './db';
 import { sendWsMessage } from './wsUtils'; // Use the utility for sending messages
+import { logger } from './logger';
 
 /**
  * Handles incoming WebSocket messages based on their type.
@@ -27,7 +28,7 @@ export async function handleWebSocketMessage(
                 }
 
                 if (clients.has(userId)) {
-                    console.warn(`Login attempt failed: User ID ${userId} is already logged in.`);
+                    logger.log({ level: 'warn', message: `Login attempt failed: User ID ${userId} is already logged in.` });
                     sendWsMessage(ws, { type: MessageType.Error, payload: { message: `User ID ${userId} is already taken/logged in.` }, originalType: message.type });
                     ws.terminate(); // Close the new connection trying to use the same ID
                     return;
@@ -38,7 +39,7 @@ export async function handleWebSocketMessage(
 
                 ws.userId = userId;
                 clients.set(userId, ws); // Add to the centrally managed map
-                console.log(`Client logged in: ${userId} (was ${oldClientId})`);
+                logger.log({ level: 'info', message: `Client logged in: ${userId} (was ${oldClientId})` });
 
                 sendWsMessage(ws, { type: MessageType.LoginSuccess, payload: { userId: userId } });
                 // Optional: broadcast(clients, { type: MessageType.UserJoined, payload: { userId } }, ws);
@@ -64,7 +65,7 @@ export async function handleWebSocketMessage(
                     await saveOrUpdatePushToken(ws.userId, pushToken);
                     sendWsMessage(ws, { type: MessageType.PushRegistered, payload: { userId: ws.userId } });
                 } catch (dbError) {
-                    console.error(`Handler Error: Failed to save push token for ${ws.userId}:`, dbError);
+                    logger.log({ level: 'error', message: `Handler Error: Failed to save push token for ${ws.userId}: ${dbError}` });
                     sendWsMessage(ws, { type: MessageType.Error, payload: { message: 'Failed to save push token on server' }, originalType: message.type });
                 }
                 break;
@@ -99,24 +100,24 @@ export async function handleWebSocketMessage(
                         ...message,
                         sender: senderId // Ensure sender ID is attached
                     };
-                    console.log(`Forwarding ${message.type} from ${senderId} to ${targetId}`);
+                    logger.log({ level: 'info', message: `Forwarding ${message.type} from ${senderId} to ${targetId}` });
                     sendWsMessage(targetClient, messageToSend);
                 } else {
                     // Target offline: Attempt push notification logic
-                    console.log(`Target client ${targetId} offline. Checking for push token.`);
+                    logger.log({ level: 'info', message: `Target client ${targetId} offline. Checking for push token.` });
                     try {
                         const pushToken = await getPushToken(targetId);
                         if (pushToken) {
-                            console.log(`Retrieved push token for offline user ${targetId}. (Push sending NOT implemented)`);
+                            logger.log({ level: 'info', message: `Retrieved push token for offline user ${targetId}. (Push sending NOT implemented)` });
                             // **** PLACEHOLDER: Trigger actual push notification sending here ****
                             // await sendPushNotification(pushToken, { /* ... notification content ... */ });
                             sendWsMessage(ws, { type: MessageType.Info, payload: `User ${targetId} is offline. Push notification required.` });
                         } else {
-                            console.log(`No push token found for offline user ${targetId}.`);
+                            logger.log({ level: 'info', message: `No push token found for offline user ${targetId}.` });
                             sendWsMessage(ws, { type: MessageType.Error, payload: { message: `User ${targetId} is offline and no push token is registered.` }, originalType: message.type });
                         }
                     } catch (dbError) {
-                        console.error(`Handler Error: DB error checking push token for ${targetId}:`, dbError);
+                        logger.log({ level: 'error', message: `Handler Error: DB error checking push token for ${targetId}: ${dbError}` });
                         sendWsMessage(ws, { type: MessageType.Error, payload: { message: `Server error checking offline status for ${targetId}.` }, originalType: message.type });
                     }
                 }
@@ -125,13 +126,13 @@ export async function handleWebSocketMessage(
 
             // Default case for unknown message types
             default:
-                console.warn(`Unknown message type received: ${message.type}`);
+                logger.log({ level: 'warn', message: `Unknown message type received: ${message.type}` });
                 sendWsMessage(ws, { type: MessageType.Error, payload: { message: `Unknown message type: ${message.type}` } });
                 break;
         }
     } catch (error) {
         // Generic error handler for the switch statement
-        console.error(`Error processing message type ${message.type} for ${ws.userId || ws.clientId}:`, error);
+        logger.log({ level: 'error', message: `Error processing message type ${message.type} for ${ws.userId || ws.clientId}: ${error}` });
         sendWsMessage(ws, { type: MessageType.Error, payload: { message: `Server error handling message type ${message.type}` }, originalType: message.type });
     }
 }

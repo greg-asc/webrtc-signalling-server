@@ -2,7 +2,6 @@ import WebSocket, { WebSocketServer } from 'ws'; // Import WebSocketServer
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
 import { IncomingMessage } from 'http';
-import winston from 'winston';
 
 // Import types
 import { WebSocketClient, SignalingMessage, MessageType } from './types';
@@ -11,6 +10,7 @@ import { WebSocketClient, SignalingMessage, MessageType } from './types';
 import { initializeDatabase, closeDbPool } from './db';
 import { handleWebSocketMessage } from './messageHandler';
 import { sendWsMessage, broadcast } from './wsUtils';
+import { logger } from './logger';
 
 // Load environment variables
 dotenv.config();
@@ -22,35 +22,6 @@ const PORT = parseInt(process.env.WEBSOCKET_PORT || '8080', 10);
 const clients = new Map<string, WebSocketClient>();
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let wss: WebSocketServer | null = null; // Declare wss here, initially null
-
-// const winston = require('winston');
-
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.json(),
-  defaultMeta: { service: 'user-service' },
-  transports: [
-    //
-    // - Write all logs with importance level of `error` or higher to `error.log`
-    //   (i.e., error, fatal, but not other levels)
-    //
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    //
-    // - Write all logs with importance level of `info` or higher to `combined.log`
-    //   (i.e., fatal, error, warn, and info, but not trace)
-    //
-    new winston.transports.File({ filename: 'combined.log' }),
-  ],
-});
-
-// If we're not in production then log to the `console` with the format:
-// `${info.level}: ${info.message} JSON.stringify({ ...rest }) `
-//
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.simple(),
-  }));
-}
 
 // --- WebSocket Server Setup ---
 logger.log({ level: 'info', message: 'Initializing signaling server...' });
