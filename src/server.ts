@@ -2,6 +2,7 @@ import WebSocket, { WebSocketServer } from 'ws'; // Import WebSocketServer
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
 import { IncomingMessage } from 'http';
+import winston from 'winston';
 
 // Import types
 import { WebSocketClient, SignalingMessage, MessageType } from './types';
@@ -22,20 +23,49 @@ const clients = new Map<string, WebSocketClient>();
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let wss: WebSocketServer | null = null; // Declare wss here, initially null
 
+// const winston = require('winston');
+
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.json(),
+  defaultMeta: { service: 'user-service' },
+  transports: [
+    //
+    // - Write all logs with importance level of `error` or higher to `error.log`
+    //   (i.e., error, fatal, but not other levels)
+    //
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    //
+    // - Write all logs with importance level of `info` or higher to `combined.log`
+    //   (i.e., fatal, error, warn, and info, but not trace)
+    //
+    new winston.transports.File({ filename: 'combined.log' }),
+  ],
+});
+
+// If we're not in production then log to the `console` with the format:
+// `${info.level}: ${info.message} JSON.stringify({ ...rest }) `
+//
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple(),
+  }));
+}
+
 // --- WebSocket Server Setup ---
-console.log('Initializing signaling server...');
+logger.log({ level: 'info', message: 'Initializing signaling server...' });
 
 initializeDatabase().then(() => {
     // *** Assign the created instance to the top-level wss variable ***
     wss = new WebSocketServer({ port: PORT });
-    console.log(`Signaling server started on ws://localhost:${PORT}`);
+    logger.log({ level: 'info', message: `Signaling server started on ws://localhost:${PORT}` });
 
     wss.on('connection', (ws: WebSocketClient, req: IncomingMessage) => {
         // Initial setup for new connection
         ws.clientId = uuidv4();
         ws.isAlive = true;
         const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
-        console.log(`Client connected (clientId: ${ws.clientId}, IP: ${clientIp})`);
+        logger.log({ level: 'info', message: `Client connected (clientId: ${ws.clientId}, IP: ${clientIp})` });
 
         // Heartbeat listener
         ws.on('pong', () => {
@@ -48,14 +78,14 @@ initializeDatabase().then(() => {
             try {
                 parsedMessage = JSON.parse(messageBuffer.toString());
                 if (!parsedMessage.type) throw new Error('Message type is missing');
-                console.log(`Received from ${ws.userId || ws.clientId}:`, parsedMessage.type, parsedMessage.target ? `-> ${parsedMessage.target}`: '');
+                logger.log({ level: 'info', message: `Received from ${ws.userId || ws.clientId}: ${parsedMessage.type} ${parsedMessage.target ? `-> ${parsedMessage.target}`: ''}` });
 
                 // Delegate processing to the message handler
                 // Pass the actual 'clients' map
                 await handleWebSocketMessage(ws, parsedMessage, clients);
 
             } catch (e: any) {
-                console.error(`Failed to parse or handle message from ${ws.userId || ws.clientId}:`, messageBuffer.toString(), e.message);
+                logger.log({ level: 'error', message: `Failed to parse or handle message from ${ws.userId || ws.clientId}: ${messageBuffer.toString()} ${e.message}` });
                 sendWsMessage(ws, { type: MessageType.Error, payload: { message: `Invalid message format or processing error: ${e.message}` } });
             }
         });
@@ -64,14 +94,14 @@ initializeDatabase().then(() => {
         ws.on('close', (code, reason) => {
             const userId = ws.userId;
             const clientId = ws.clientId; // Use temp ID if login never happened
-            console.log(`Client disconnected: ${userId || clientId}, Code: ${code}, Reason: ${reason.toString()}`);
+            logger.log({ level: 'info', message: `Client disconnected: ${userId || clientId}, Code: ${code}, Reason: ${reason.toString()}` });
             if (userId && clients.has(userId)) {
                 clients.delete(userId); // Remove client from map
                 // Notify other users
                 broadcast(clients, { type: MessageType.UserLeft, payload: { userId: userId } }, ws);
-                console.log(`User ${userId} removed from active clients. Total clients: ${clients.size}`);
+                logger.log({ level: 'info', message: `User ${userId} removed from active clients. Total clients: ${clients.size}` });
             } else {
-                 console.log(`Unauthenticated client ${clientId} disconnected.`);
+                 logger.log({ level: 'info', message: `Unauthenticated client ${clientId} disconnected.` });
             }
         });
 
@@ -79,11 +109,11 @@ initializeDatabase().then(() => {
         ws.on('error', (error) => {
             const userId = ws.userId;
             const clientId = ws.clientId;
-            console.error(`WebSocket error for ${userId || clientId}:`, error);
+            logger.log({ level: 'error', message: `WebSocket error for ${userId || clientId}: ${error}` });
             if (userId && clients.has(userId)) {
                 clients.delete(userId);
                 broadcast(clients, { type: MessageType.UserLeft, payload: { userId: userId } }, ws);
-                 console.log(`User ${userId} removed due to error. Total clients: ${clients.size}`);
+                 logger.log({ level: 'info', message: `User ${userId} removed due to error. Total clients: ${clients.size}` });
             }
             if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
                  ws.terminate();
@@ -99,7 +129,7 @@ initializeDatabase().then(() => {
             // Cast to our extended type to access custom properties
             const client = wsInstance as WebSocketClient;
             if (!client.isAlive) {
-                console.log(`Heartbeat failed for ${client.userId || client.clientId}. Terminating.`);
+                logger.log({ level: 'info', message: `Heartbeat failed for ${client.userId || client.clientId}. Terminating.` });
                 client.terminate();
                 return;
             }
@@ -111,32 +141,32 @@ initializeDatabase().then(() => {
 
     // Listener for when the server itself closes
     wss.on('close', () => {
-        console.log('WebSocket server instance has closed.');
+        logger.log({ level: 'info', message: 'WebSocket server instance has closed.' });
         // Stop the heartbeat interval ONLY when the server instance closes
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         // Closing the DB pool is handled in gracefulShutdown after wss.close completes
     });
 
-    console.log('Signaling server setup complete and listening.');
+    logger.log({ level: 'info', message: 'Signaling server setup complete and listening.' });
 
 }).catch(err => {
-    console.error("FATAL: Failed to initialize database. Server cannot start.", err);
+    logger.log({ level: 'error', message: `FATAL: Failed to initialize database. Server cannot start. ${err}` });
     process.exit(1); // Exit if DB initialization fails
 });
 
 // --- Graceful Shutdown Logic ---
 async function gracefulShutdown(signal: string) {
-    console.log(`Received ${signal}. Shutting down gracefully...`);
+    logger.log({ level: 'info', message: `Received ${signal}. Shutting down gracefully...` });
 
     if (heartbeatInterval) {
         clearInterval(heartbeatInterval);
         heartbeatInterval = null;
-        console.log('Heartbeat interval stopped.');
+        logger.log({ level: 'info', message: 'Heartbeat interval stopped.' });
     }
 
     // Check if the server instance exists
     if (!wss) {
-        console.log('WebSocket server instance was not created. Closing DB pool.');
+        logger.log({ level: 'info', message: 'WebSocket server instance was not created. Closing DB pool.' });
         await closeDbPool();
         process.exit(0);
         return;
@@ -144,32 +174,32 @@ async function gracefulShutdown(signal: string) {
 
     // 1. Close all client connections
     // wss.clients is a Set of all active connections managed by ws library
-    console.log(`Terminating ${wss.clients.size} active client connections...`);
+    logger.log({ level: 'info', message: `Terminating ${wss.clients.size} active client connections...` });
     wss.clients.forEach(client => {
         client.terminate(); // Forcefully close connections
     });
     clients.clear(); // Clear our user map as well
 
     // 2. Close the WebSocket server itself
-    console.log('Closing WebSocket server...');
+    logger.log({ level: 'info', message: 'Closing WebSocket server...' });
     wss.close(async (err) => { // Use the callback here
         if (err) {
-            console.error('Error closing WebSocket server:', err);
+            logger.log({ level: 'error', message: `Error closing WebSocket server: ${err}` });
         } else {
-            console.log('WebSocket server closed successfully.');
+            logger.log({ level: 'info', message: 'WebSocket server closed successfully.' });
         }
 
         // 3. Close the database pool AFTER the server is closed
         await closeDbPool();
 
         // 4. Exit the process
-        console.log('Shutdown complete.');
+        logger.log({ level: 'info', message: 'Shutdown complete.' });
         process.exit(err ? 1 : 0); // Exit with error code if server closing failed
     });
 
     // Force exit after a timeout if graceful shutdown hangs
     setTimeout(() => {
-        console.error('Graceful shutdown timed out. Forcing exit.');
+        logger.log({ level: 'error', message: 'Graceful shutdown timed out. Forcing exit.' });
         process.exit(1);
     }, 10000); // 10 seconds timeout
 }
