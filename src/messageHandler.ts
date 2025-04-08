@@ -1,3 +1,4 @@
+import WebSocket from 'ws';
 import { WebSocketClient, SignalingMessage, MessageType, LoginPayload, RegisterPushPayload } from './types';
 import { saveOrUpdatePushToken, getPushToken } from './db';
 import { sendWsMessage } from './wsUtils'; // Use the utility for sending messages
